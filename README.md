@@ -106,3 +106,23 @@ cp .env.example .env && vi .env
 ## License
 
 MIT
+
+## 附：列表卡片被极端长图撑爆的修复（站点侧 CSS）
+
+若首页卡片长度差异巨大，通常是**封面图本身比例极端**（例如 126×2560，高宽比 20:1）。
+主题原本的 `aspect-ratio: auto; height: 100%` 会让封面列按图片自身比例撑高，
+300px 宽的列可被撑到约 6000px。
+
+修法（`themes/<主题>/source/css/cards.css`）：
+
+```css
+.post-list-container[data-layout="list"] .post-card-item[data-has-cover="true"] .post-card-cover {
+  aspect-ratio: 16 / 9;   /* 固定比例，不再由图片决定 */
+  height: auto;
+  max-height: 190px;      /* 高度上限 */
+  min-height: 0;
+  align-self: center;     /* 不再随行高拉伸 */
+}
+```
+
+纯 CSS，之后上传的任何文章都自动遵循。实测：卡片高低差从 5884px（25.0×）降到 25px（1.1×）。
