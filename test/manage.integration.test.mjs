@@ -74,9 +74,12 @@ let list;
   ok('按日期倒序', r.body.posts[0].date > r.body.posts[5].date);
   const cats = r.body.categories.map((c) => c.path + '×' + c.count);
   console.log('     分类统计:', cats.join(', '));
-  ok('分类聚合正确（随笔 5 / 硬件 1）',
-    r.body.categories.some((c) => c.path === '随笔' && c.count === 5) &&
-    r.body.categories.some((c) => c.path === '硬件' && c.count === 1));
+  // 不写死数量（分类会随实际使用变化），改为与文章实际分布核对
+  const expectCount = {};
+  r.body.posts.forEach((p) => { if (p.categoryPath) expectCount[p.categoryPath] = (expectCount[p.categoryPath] || 0) + 1; });
+  ok('分类计数与文章实际分布一致',
+    Object.entries(expectCount).every(([k, v]) => r.body.categories.some((c) => c.path === k && c.count === v)),
+    JSON.stringify({ expect: expectCount, got: r.body.categories.map((c) => c.path + ':' + c.count) }));
   ok('url 字段与线上一致', r.body.posts.find((p) => p.slug === 'kirin9020-scan').url === '/2026/09/06/kirin9020-scan/');
 }
 
@@ -100,7 +103,10 @@ console.log('\n【setDate：改日期且保住旧链接】');
   puts.length = 0;
   const r = await call({ key: 'TESTKEY', action: 'setDate', path: 'source/_posts/kirin9020-scan.md', date: '2025-09-01 10:00' });
   ok('接口返回成功', r.body.ok, JSON.stringify(r.body));
-  ok('标记已护住链接', r.body.permalinkProtected === true);
+  // 文章可能已有 permalink（之前用面板调过顺序），此时不会再写一遍但链接依然是保住的
+  ok('旧链接被保住（新写入或沿用已有）',
+     r.body.permalinkProtected === true || /^permalink:/m.test(puts[0].text),
+     `protected=${r.body.permalinkProtected}`);
   const out = puts[0].text;
   ok('新日期写入', out.includes('date: 2025-09-01 10:00:00'), out.match(/date:.*/)?.[0]);
   ok('permalink 固定为旧 URL', out.includes('permalink: /2026/09/06/kirin9020-scan/'), out.match(/permalink:.*/)?.[0]);

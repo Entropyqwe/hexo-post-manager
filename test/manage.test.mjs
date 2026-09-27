@@ -70,10 +70,14 @@ console.log('\n【4】改日期（setDate 等价操作）: kirin9020-scan 2026-0
   T.setRaw(fields, 'date', T.fmtDate(T.parseDate('2025-09-01 10:00')));
   const out = T.buildFM(fields, body);
   console.log('--- 改写结果 ---\n' + out.split('\n').slice(0, 9).map((l) => '      ' + l).join('\n'));
+  // 注意：文章可能已经有 permalink（之前用面板改过顺序就会写入），
+  // 所以这里断言的是"旧链接被固定住"，而不是"本次新写入"
   const plRe = /permalink: '?\/2026\/09\/06\/kirin9020-scan\/'?/;
-  ok('  写入了 permalink', kept && plRe.test(out), out.match(/permalink:.*/)?.[0]);
+  ok('  旧链接被 permalink 固定住', plRe.test(out), out.match(/permalink:.*/)?.[0]);
+  ok('  permalink 只出现一次', (out.match(/^permalink:/gm) || []).length === 1);
   ok('  新日期已写入', out.includes('date: 2025-09-01 10:00:00'));
-  ok('  旧链接被固定为原 URL', plRe.test(out), out.match(/permalink:.*/)?.[0]);
+  ok('  protectPermalink 语义正确（已有则不重复写）',
+     kept === !/^permalink:/m.test(kirin._text), `kept=${kept}`);
 }
 
 // ---------------------------------------------------------------- 5. 已有 permalink 不覆盖（幂等）
