@@ -179,7 +179,11 @@
       api('verify').then(function (o) {
         if (o && o.ok) { gst('✅ 验证通过', true); showPanel(); load(); }
         else { sessionStorage.removeItem(SK); gst('❌ ' + ((o && o.error) || '验证失败'), false); }
-      }).catch(function (e) { sessionStorage.removeItem(SK); gst('❌ 网络错误：' + e.message, false); });
+      }).catch(function (e) {
+        // fetch 被浏览器直接掐断（CORS 预检失败）通常=云函数还没部署
+        sessionStorage.removeItem(SK);
+        gst('❌ 连不上云函数 ' + EP + '/manage。\n多半是 manage.js 还没部署到 Cloudflare Pages（部署后即可正常使用）。\n原始报错：' + e.message, false);
+      });
     }
     document.getElementById('pm-enter').addEventListener('click', doEnter);
     keyEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doEnter(); });
