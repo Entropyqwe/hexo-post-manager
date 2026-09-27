@@ -144,7 +144,15 @@
       if (extra) for (var k in extra) body[k] = extra[k];
       return fetch(EP + '/manage', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-      }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; }); });
+      }).then(function (r) {
+        return r.json().catch(function () {
+          // 404 基本都是云函数还没部署上去，直接说清楚，别让人猜
+          if (r.status === 404) {
+            return { ok: false, error: '云函数未部署：' + EP + '/manage 返回 404。请先运行 deploy.sh 把 manage.js 部署到 Cloudflare Pages。' };
+          }
+          return { ok: false, error: 'HTTP ' + r.status };
+        });
+      });
     }
 
     // ---------------- 打开 / 关闭 ----------------
