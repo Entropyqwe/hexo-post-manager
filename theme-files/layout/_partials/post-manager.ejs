@@ -1,0 +1,378 @@
+<% /**
+ * 文章管理面板：分类（文件夹）管理 + 文章顺序调整
+ * 需要密钥验证；密钥由 Cloudflare Function 服务端校验（ADMIN_KEY）。
+ * 主题配置启用：
+ *   manage: { enabled: true }            # endpoint 省略则复用 upload.endpoint
+ */ %>
+<% var mg = theme.manage || {};
+   var mgEp = mg.endpoint || (theme.upload && theme.upload.endpoint) || '';
+   if (mg.enabled && mgEp) { %>
+<button id="pm-fab" title="文章管理" aria-label="文章管理">⚙️</button>
+<div id="pm-modal" hidden>
+  <div class="pm-box">
+    <button id="pm-close" class="pm-close" aria-label="关闭">✕</button>
+
+    <!-- ───────── 步骤 1：身份验证 ───────── -->
+    <div id="pm-gate">
+      <h3>🔐 身份验证</h3>
+      <p class="pm-sub">调整文章分类与顺序属于写操作，需要先验证身份。</p>
+      <label class="pm-field">管理密钥
+        <input id="pm-key" type="password" placeholder="请输入管理密钥" autocomplete="off">
+      </label>
+      <div id="pm-gate-status" class="pm-status"></div>
+      <button id="pm-enter" class="pm-primary">验证并进入</button>
+      <div class="pm-hint">密钥仅用于本次会话，由服务端校验；验证通过前不会读取任何数据。</div>
+    </div>
+
+    <!-- ───────── 步骤 2：管理面板 ───────── -->
+    <div id="pm-panel" hidden>
+      <div class="pm-head">
+        <h3>⚙️ 文章管理</h3>
+        <button id="pm-logout" class="pm-mini">退出</button>
+      </div>
+      <div class="pm-seg">
+        <button type="button" data-tab="cats" class="on">📁 分类 / 文件夹</button>
+        <button type="button" data-tab="order">🔀 文章顺序</button>
+      </div>
+      <div id="pm-status" class="pm-status"></div>
+
+      <!-- 分类页 -->
+      <div id="pm-tab-cats">
+        <div class="pm-block">
+          <div class="pm-block-t">新建分类</div>
+          <div class="pm-row">
+            <input id="pm-newcat" placeholder="如：技术 或 技术/前端（斜杠表示子文件夹）">
+            <button id="pm-addcat" class="pm-mini pm-mini-on">新建</button>
+          </div>
+          <div class="pm-hint">Hexo 的分类由文章决定：新建后把文章移进去，它才会出现在网站上。</div>
+        </div>
+        <div class="pm-block">
+          <div class="pm-block-t">现有分类</div>
+          <div id="pm-catlist" class="pm-list"></div>
+        </div>
+        <div class="pm-block">
+          <div class="pm-block-t">文章归属（移动文件到别的文件夹）</div>
+          <div id="pm-movelist" class="pm-list"></div>
+        </div>
+      </div>
+
+      <!-- 排序页 -->
+      <div id="pm-tab-order" hidden>
+        <div class="pm-hint pm-mb">
+          顺序由「发布时间」决定（<code>index_generator.order_by: -date</code>）。
+          拖动或点 ▲▼ 调整；保存时会重写 <code>date</code>，并自动写入
+          <code>permalink</code> 固定旧链接，<b>已有 URL 不会失效</b>。
+        </div>
+        <div id="pm-orderlist" class="pm-list"></div>
+        <button id="pm-saveorder" class="pm-primary">保存顺序</button>
+      </div>
+    </div>
+  </div>
+</div>
+<style>
+  #pm-fab { position: fixed; right: 22px; bottom: 150px; z-index: 600; width: 48px; height: 48px; border: 0;
+    border-radius: 50%; cursor: pointer; font-size: 20px; color: #fff;
+    background: linear-gradient(135deg, #6a7cff, #5b6cf0); box-shadow: 0 6px 18px rgba(106,124,255,.45); transition: transform .2s; }
+  #pm-fab:hover { transform: scale(1.08); }
+  #pm-modal { position: fixed; inset: 0; z-index: 750; display: flex; align-items: center; justify-content: center;
+    background: rgba(10,10,20,.6); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); padding: 14px; }
+  #pm-modal[hidden] { display: none; }
+  .pm-box { width: min(620px, 95vw); max-height: 88vh; overflow: auto; border-radius: 18px; padding: 20px 22px;
+    color: #f2f3f7; background: rgba(24,26,36,.94); border: 1px solid rgba(255,255,255,.14);
+    box-shadow: 0 20px 60px rgba(0,0,0,.55); position: relative; font-size: .9rem; }
+  .pm-box h3 { margin: 0 0 10px; font-size: 1.15rem; }
+  .pm-sub { margin: 0 0 14px; opacity: .75; font-size: .85rem; line-height: 1.5; }
+  .pm-close { position: absolute; top: 12px; right: 14px; border: 0; background: rgba(255,255,255,.08); color: inherit;
+    width: 24px; height: 24px; border-radius: 50%; cursor: pointer; line-height: 1; z-index: 2; }
+  .pm-head { display: flex; align-items: center; justify-content: space-between; }
+  .pm-field { display: block; margin: 9px 0; font-size: .84rem; opacity: .95; }
+  .pm-field input, .pm-row input { width: 100%; box-sizing: border-box; margin-top: 4px; padding: 9px 10px;
+    border-radius: 9px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.06); color: inherit; font: inherit; }
+  .pm-row { display: flex; gap: 8px; align-items: center; }
+  .pm-row input { margin-top: 0; }
+  .pm-seg { display: flex; gap: 8px; margin: 12px 0; }
+  .pm-seg button { flex: 1; padding: 8px; border-radius: 10px; cursor: pointer; border: 1px solid rgba(255,255,255,.22);
+    background: transparent; color: inherit; font-size: .9rem; }
+  .pm-seg button.on { color: #fff; border: 0; background: linear-gradient(135deg, #6a7cff, #5b6cf0); }
+  .pm-primary { width: 100%; border: 0; border-radius: 11px; padding: 12px; cursor: pointer; color: #fff; font-size: 1rem;
+    background: linear-gradient(135deg, #6a7cff, #5b6cf0); margin-top: 6px; }
+  .pm-primary:disabled { opacity: .5; cursor: default; }
+  .pm-mini { border: 1px solid rgba(255,255,255,.25); background: transparent; color: inherit; border-radius: 8px;
+    padding: 5px 10px; cursor: pointer; font-size: .8rem; white-space: nowrap; }
+  .pm-mini-on { background: linear-gradient(135deg, #6a7cff, #5b6cf0); border: 0; color: #fff; }
+  .pm-mini-danger { border-color: rgba(255,120,120,.5); color: #ffb4a0; }
+  .pm-block { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 12px; margin: 10px 0; background: rgba(255,255,255,.03); }
+  .pm-block-t { font-size: .8rem; opacity: .65; margin-bottom: 8px; letter-spacing: .04em; }
+  .pm-list { display: flex; flex-direction: column; gap: 6px; }
+  .pm-item { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 9px; background: rgba(255,255,255,.05); }
+  .pm-item .pm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pm-item .pm-meta { font-size: .76rem; opacity: .6; white-space: nowrap; }
+  .pm-item select { background: rgba(255,255,255,.08); color: inherit; border: 1px solid rgba(255,255,255,.2);
+    border-radius: 8px; padding: 4px 6px; font: inherit; font-size: .8rem; max-width: 45%; }
+  .pm-item .pm-idx { width: 1.6em; text-align: center; opacity: .5; font-size: .78rem; }
+  .pm-item.pm-drag { opacity: .45; }
+  .pm-item[draggable="true"] { cursor: grab; }
+  .pm-depth1 { margin-left: 16px; } .pm-depth2 { margin-left: 32px; } .pm-depth3 { margin-left: 48px; }
+  .pm-status { min-height: 1.1em; margin: 8px 0; font-weight: 600; white-space: pre-wrap; font-size: .84rem; }
+  .pm-hint { font-size: .74rem; opacity: .55; margin-top: 8px; line-height: 1.5; }
+  .pm-mb { margin-bottom: 10px; }
+  .pm-empty { opacity: .5; font-size: .82rem; padding: 6px 2px; }
+</style>
+<script>
+(function () {
+  try {
+    var EP = '<%= mgEp.replace(/\//g, "\\/") %>';
+    var SK = 'pm_admin_key';
+    var fab = document.getElementById('pm-fab');
+    var modal = document.getElementById('pm-modal');
+    if (!fab || !modal) return;
+
+    var gate = document.getElementById('pm-gate');
+    var panel = document.getElementById('pm-panel');
+    var keyEl = document.getElementById('pm-key');
+    var gateSt = document.getElementById('pm-gate-status');
+    var stEl = document.getElementById('pm-status');
+    var state = { posts: [], categories: [], order: [], tab: 'cats' };
+
+    function st(msg, ok) { stEl.textContent = msg || ''; stEl.style.color = ok ? '#8ef0b0' : '#ffb4a0'; }
+    function gst(msg, ok) { gateSt.textContent = msg || ''; gateSt.style.color = ok ? '#8ef0b0' : '#ffb4a0'; }
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+    function key() { return sessionStorage.getItem(SK) || ''; }
+
+    function api(action, extra) {
+      var body = { key: key(), action: action };
+      if (extra) for (var k in extra) body[k] = extra[k];
+      return fetch(EP + '/manage', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      }).then(function (r) { return r.json().catch(function () { return { ok: false, error: 'HTTP ' + r.status }; }); });
+    }
+
+    // ---------------- 打开 / 关闭 ----------------
+    fab.addEventListener('click', function () {
+      modal.hidden = false;
+      if (key()) { showPanel(); load(); } else { showGate(); }
+    });
+    document.getElementById('pm-close').addEventListener('click', function () { modal.hidden = true; });
+    modal.addEventListener('click', function (e) { if (e.target === modal) modal.hidden = true; });
+
+    function showGate() { gate.hidden = false; panel.hidden = true; setTimeout(function () { keyEl.focus(); }, 60); }
+    function showPanel() { gate.hidden = true; panel.hidden = false; }
+
+    document.getElementById('pm-logout').addEventListener('click', function () {
+      sessionStorage.removeItem(SK); keyEl.value = ''; gst(''); showGate();
+    });
+
+    // ---------------- 身份验证 ----------------
+    function doEnter() {
+      var k = keyEl.value.trim();
+      if (!k) return gst('⚠️ 请输入管理密钥', false);
+      gst('正在验证…', true);
+      sessionStorage.setItem(SK, k);
+      api('verify').then(function (o) {
+        if (o && o.ok) { gst('✅ 验证通过', true); showPanel(); load(); }
+        else { sessionStorage.removeItem(SK); gst('❌ ' + ((o && o.error) || '验证失败'), false); }
+      }).catch(function (e) { sessionStorage.removeItem(SK); gst('❌ 网络错误：' + e.message, false); });
+    }
+    document.getElementById('pm-enter').addEventListener('click', doEnter);
+    keyEl.addEventListener('keydown', function (e) { if (e.key === 'Enter') doEnter(); });
+
+    // ---------------- 加载 ----------------
+    function load() {
+      st('正在读取文章列表…', true);
+      api('list').then(function (o) {
+        if (!o || !o.ok) { st('❌ ' + ((o && o.error) || '读取失败'), false); return; }
+        state.posts = o.posts || [];
+        state.categories = o.categories || [];
+        state.order = state.posts.map(function (p) { return p.path; });
+        st('共 ' + state.posts.length + ' 篇文章 / ' + state.categories.length + ' 个分类', true);
+        renderCats(); renderOrder();
+      }).catch(function (e) { st('❌ 网络错误：' + e.message, false); });
+    }
+
+    // ---------------- 分类页 ----------------
+    function catOptions(selected) {
+      var html = '<option value="">（未分类）</option>';
+      for (var i = 0; i < state.categories.length; i++) {
+        var c = state.categories[i];
+        var pad = c.depth > 0 ? new Array(c.depth + 1).join('　') : '';
+        html += '<option value="' + esc(c.path) + '"' + (c.path === selected ? ' selected' : '') + '>'
+          + pad + esc(c.path.split('/').pop()) + '</option>';
+      }
+      return html;
+    }
+
+    function renderCats() {
+      var box = document.getElementById('pm-catlist');
+      if (!state.categories.length) { box.innerHTML = '<div class="pm-empty">还没有分类</div>'; }
+      else {
+        box.innerHTML = state.categories.map(function (c) {
+          var cls = 'pm-item' + (c.depth === 1 ? ' pm-depth1' : c.depth === 2 ? ' pm-depth2' : c.depth > 2 ? ' pm-depth3' : '');
+          return '<div class="' + cls + '">'
+            + '<span class="pm-name">📁 ' + esc(c.path) + '</span>'
+            + '<span class="pm-meta">' + c.count + ' 篇</span>'
+            + '<button class="pm-mini" data-rename="' + esc(c.path) + '">重命名</button>'
+            + '<button class="pm-mini pm-mini-danger" data-del="' + esc(c.path) + '">删除</button>'
+            + '</div>';
+        }).join('');
+      }
+      var mv = document.getElementById('pm-movelist');
+      mv.innerHTML = state.posts.map(function (p) {
+        return '<div class="pm-item">'
+          + '<span class="pm-name" title="' + esc(p.title) + '">' + esc(p.title) + '</span>'
+          + '<select data-move="' + esc(p.path) + '">' + catOptions(p.categoryPath) + '</select>'
+          + '</div>';
+      }).join('');
+    }
+
+    document.getElementById('pm-catlist').addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button') : null;
+      if (!b) return;
+      if (b.dataset.rename) {
+        var from = b.dataset.rename;
+        var to = prompt('把分类「' + from + '」重命名为：（斜杠表示子文件夹）', from);
+        if (to == null) return;
+        to = to.trim();
+        if (!to || to === from) return;
+        st('正在重命名…', true);
+        api('renameCategory', { from: from, to: to }).then(function (o) {
+          st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
+          if (o && o.ok) load();
+        });
+      } else if (b.dataset.del) {
+        var name = b.dataset.del;
+        var n = 0;
+        state.posts.forEach(function (p) { if (p.categoryPath === name) n++; });
+        if (!confirm('删除分类「' + name + '」？\n\n' + n + ' 篇文章会变为「未分类」。\n（子分类不会被删除）')) return;
+        st('正在删除…', true);
+        api('deleteCategory', { name: name }).then(function (o) {
+          st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
+          if (o && o.ok) load();
+        });
+      }
+    });
+
+    document.getElementById('pm-newcat').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') document.getElementById('pm-addcat').click();
+    });
+    document.getElementById('pm-addcat').addEventListener('click', function () {
+      var v = document.getElementById('pm-newcat').value.trim();
+      if (!v) return st('⚠️ 请填写分类名', false);
+      var exists = state.categories.some(function (c) { return c.path === v; });
+      if (exists) return st('⚠️ 该分类已存在，直接在下方把文章移入即可', false);
+      st('分类「' + v + '」已准备好：请在下方「文章归属」里把文章选到它，保存后即生效。', true);
+      var sel = document.getElementById('pm-movelist').querySelector('select');
+      if (sel && !sel.querySelector('option[value="' + v.replace(/"/g, '\\"') + '"]')) {
+        var o = document.createElement('option');
+        o.value = v; o.textContent = v;
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === '') { sel.insertBefore(o, sel.options[i + 1] || null); break; }
+        }
+      }
+      document.getElementById('pm-newcat').value = '';
+    });
+
+    document.getElementById('pm-movelist').addEventListener('change', function (e) {
+      var sel = e.target;
+      if (!sel || !sel.dataset.move) return;
+      var path = sel.dataset.move, cat = sel.value;
+      st('正在移动…', true);
+      api('setCategory', { path: path, categories: cat }).then(function (o) {
+        st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
+        if (o && o.ok) load();
+      });
+    });
+
+    // ---------------- 排序页 ----------------
+    function renderOrder() {
+      var box = document.getElementById('pm-orderlist');
+      if (!state.order.length) { box.innerHTML = '<div class="pm-empty">没有文章</div>'; return; }
+      box.innerHTML = state.order.map(function (path, i) {
+        var p = state.posts.filter(function (x) { return x.path === path; })[0];
+        if (!p) return '';
+        return '<div class="pm-item" draggable="true" data-idx="' + i + '">'
+          + '<span class="pm-idx">' + (i + 1) + '</span>'
+          + '<span class="pm-name" title="' + esc(p.title) + '">' + esc(p.title) + '</span>'
+          + '<span class="pm-meta">' + esc(p.date || '无日期') + '</span>'
+          + '<button class="pm-mini" data-up="' + i + '">▲</button>'
+          + '<button class="pm-mini" data-down="' + i + '">▼</button>'
+          + '<button class="pm-mini" data-date="' + esc(p.path) + '">改日期</button>'
+          + '</div>';
+      }).join('');
+    }
+
+    function moveIdx(i, j) {
+      if (j < 0 || j >= state.order.length) return;
+      var t = state.order[i]; state.order[i] = state.order[j]; state.order[j] = t;
+      renderOrder();
+    }
+
+    document.getElementById('pm-orderlist').addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button') : null;
+      if (!b) return;
+      if (b.dataset.up != null) moveIdx(+b.dataset.up, +b.dataset.up - 1);
+      else if (b.dataset.down != null) moveIdx(+b.dataset.down, +b.dataset.down + 1);
+      else if (b.dataset.date) {
+        var path = b.dataset.date;
+        var p = state.posts.filter(function (x) { return x.path === path; })[0];
+        var v = prompt('修改「' + p.title + '」的发布时间\n格式：YYYY-MM-DD HH:mm\n（顺序由时间决定；旧链接会自动用 permalink 固定）', p.date || '');
+        if (v == null || !v.trim()) return;
+        st('正在修改日期…', true);
+        api('setDate', { path: path, date: v.trim() }).then(function (o) {
+          st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
+          if (o && o.ok) load();
+        });
+      }
+    });
+
+    // 拖拽排序
+    var dragFrom = null;
+    document.getElementById('pm-orderlist').addEventListener('dragstart', function (e) {
+      var it = e.target.closest ? e.target.closest('.pm-item') : null;
+      if (!it) return;
+      dragFrom = +it.dataset.idx; it.classList.add('pm-drag');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', String(dragFrom)); } catch (x) {}
+    });
+    document.getElementById('pm-orderlist').addEventListener('dragend', function (e) {
+      var it = e.target.closest ? e.target.closest('.pm-item') : null;
+      if (it) it.classList.remove('pm-drag');
+      dragFrom = null;
+    });
+    document.getElementById('pm-orderlist').addEventListener('dragover', function (e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    document.getElementById('pm-orderlist').addEventListener('drop', function (e) {
+      e.preventDefault();
+      var it = e.target.closest ? e.target.closest('.pm-item') : null;
+      if (!it || dragFrom == null) return;
+      var to = +it.dataset.idx;
+      var item = state.order.splice(dragFrom, 1)[0];
+      state.order.splice(to, 0, item);
+      renderOrder();
+    });
+
+    document.getElementById('pm-saveorder').addEventListener('click', function () {
+      var order = state.order.map(function (p) { return { path: p }; });
+      st('正在保存顺序…', true);
+      this.disabled = true;
+      var btn = this;
+      api('reorder', { order: order }).then(function (o) {
+        st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
+        btn.disabled = false;
+        if (o && o.ok) load();
+      }).catch(function (e) { st('❌ ' + e.message, false); btn.disabled = false; });
+    });
+
+    // ---------------- Tab 切换 ----------------
+    modal.querySelectorAll('.pm-seg button').forEach(function (b) {
+      b.addEventListener('click', function () {
+        state.tab = b.dataset.tab;
+        modal.querySelectorAll('.pm-seg button').forEach(function (x) { x.classList.toggle('on', x.dataset.tab === state.tab); });
+        document.getElementById('pm-tab-cats').hidden = state.tab !== 'cats';
+        document.getElementById('pm-tab-order').hidden = state.tab !== 'order';
+      });
+    });
+  } catch (e) {
+    try { var s = document.getElementById('pm-status'); if (s) s.textContent = '初始化失败：' + e.message; } catch (e2) {}
+  }
+})();
+</script>
+<% } %>
