@@ -120,7 +120,14 @@
   .pm-item-col { flex-direction: column; align-items: stretch; gap: 5px; }
   .pm-item-main { display: flex; align-items: center; gap: 8px; }
   .pm-desc { font-size: .78rem; opacity: .72; line-height: 1.5; word-break: break-word; padding-left: 2px; }
-  .pm-desc-none { opacity: .32; font-style: italic; }
+  .pm-desc-none { opacity: .32; font-style: italic; cursor: pointer; }
+  .pm-desc[data-descedit] { cursor: pointer; }
+  .pm-desc-pen { opacity: .5; font-size: .72rem; }
+  .pm-desc-edit { display: flex; flex-direction: column; gap: 6px; }
+  .pm-desc-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 9px; resize: vertical;
+    border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.07); color: inherit; font: inherit; font-size: .82rem; line-height: 1.55; }
+  .pm-desc-actions { display: flex; align-items: center; gap: 8px; }
+  .pm-desc-hint { font-size: .72rem; opacity: .45; }
 </style>
 <script>
 (function () {
@@ -136,7 +143,7 @@
     var keyEl = document.getElementById('pm-key');
     var gateSt = document.getElementById('pm-gate-status');
     var stEl = document.getElementById('pm-status');
-    var state = { posts: [], categories: [], order: [], tab: 'cats' };
+    var state = { posts: [], categories: [], order: [], tab: 'cats', editingDesc: null };
 
     function st(msg, ok) { stEl.textContent = msg || ''; stEl.style.color = ok ? '#8ef0b0' : '#ffb4a0'; }
     function gst(msg, ok) { gateSt.textContent = msg || ''; gateSt.style.color = ok ? '#8ef0b0' : '#ffb4a0'; }
@@ -231,9 +238,21 @@
             + '<button class="pm-mini" data-rename="' + esc(c.path) + '">重命名</button>'
             + '<button class="pm-mini pm-mini-danger" data-del="' + esc(c.path) + '">删除</button>'
             + '</div>'
-            + (c.description
-                ? '<div class="pm-desc">' + esc(c.description) + '</div>'
-                : '<div class="pm-desc pm-desc-none">（还没有介绍 —— 点「加介绍」写一段，访客点进这个文件夹就能看到）</div>')
+            + (state.editingDesc === c.path
+                ? '<div class="pm-desc-edit">'
+                  + '<textarea class="pm-desc-input" data-descinput="' + esc(c.path) + '" rows="3" maxlength="200" '
+                  + 'placeholder="写一句这个文件夹是干什么的 —— 访客点进这个文件夹就能看到。留空保存 = 清除介绍">'
+                  + esc(c.description || '') + '</textarea>'
+                  + '<div class="pm-desc-actions">'
+                  + '<button class="pm-mini pm-mini-on" data-descsave="' + esc(c.path) + '">💾 保存介绍</button>'
+                  + '<button class="pm-mini" data-desccancel="1">取消</button>'
+                  + '<span class="pm-desc-hint">最多 200 字</span>'
+                  + '</div></div>'
+                : (c.description
+                    ? '<div class="pm-desc" data-descedit="' + esc(c.path) + '" title="点击可直接编辑">'
+                      + esc(c.description) + ' <span class="pm-desc-pen">✏️</span></div>'
+                    : '<div class="pm-desc pm-desc-none" data-descedit="' + esc(c.path) + '" '
+                      + 'title="点击写介绍">（还没有介绍 —— 点这里写一段，访客点进这个文件夹就能看到）</div>'))
             + '</div>';
         }).join('');
       }
@@ -248,17 +267,41 @@
 
     document.getElementById('pm-catlist').addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('button') : null;
-      if (!b) return;
+      if (!b) {
+        // 直接点描述文字也能进编辑
+        var d = e.target.closest ? e.target.closest('[data-descedit]') : null;
+        if (d && d.dataset.descedit) {
+          state.editingDesc = d.dataset.descedit;
+          renderCats();
+          var t2 = document.querySelector('.pm-desc-input');
+          if (t2) t2.focus();
+        }
+        return;
+      }
       if (b.dataset.desc) {
-        var dpath = b.dataset.desc;
-        var curCat = state.categories.filter(function (x) { return x.path === dpath; })[0] || {};
-        var v = prompt('给文件夹「' + dpath + '」写一段介绍\n\n（访客点进这个文件夹时就会看到；留空则清除）', curCat.description || '');
-        if (v == null) return;
+        // 打开内嵌编辑器（不用 prompt，避免被浏览器拦截导致静默失败）
+        state.editingDesc = b.dataset.desc;
+        renderCats();
+        var ta = document.querySelector('.pm-desc-input');
+        if (ta) { ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {} }
+      } else if (b.dataset.descsave) {
+        var dpath = b.dataset.descsave;
+        var inp = document.querySelector('.pm-desc-input');
+        var val = inp ? inp.value.trim() : '';
         st('正在保存介绍…', true);
-        api('setCategoryDescription', { path: dpath, description: v.trim() }).then(function (o) {
-          st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
-          if (o && o.ok) load();
-        });
+        api('setCategoryDescription', { path: dpath, description: val }).then(function (o) {
+          if (o && o.ok) {
+            state.categories.forEach(function (c) { if (c.path === dpath) c.description = val; });
+            state.editingDesc = null;
+            renderCats();
+            st('✅ ' + (val ? '介绍已保存' : '介绍已清除') + '。1~3 分钟后刷新网站，点进这个文件夹就能看到。', true);
+          } else {
+            st('❌ ' + ((o && o.error) || '保存失败'), false);
+          }
+        }).catch(function (e) { st('❌ 网络错误：' + e.message, false); });
+      } else if (b.dataset.desccancel) {
+        state.editingDesc = null;
+        renderCats();
       } else if (b.dataset.rename) {
         var from = b.dataset.rename;
         var to = prompt('把分类「' + from + '」重命名为：（斜杠表示子文件夹）', from);

@@ -311,15 +311,22 @@ async function loadCatList(env) {
   return { list: list.filter((x) => x.name), sha: f.sha };
 }
 
-async function saveCatList(env, entries) {
+// preserveMissing=true 时：若传入项没带介绍、而文件里原本有，则沿用原来的。
+// 用于「新建/改名/删除」这类整体回写，防止把已保存的介绍冲掉。
+// （清除介绍走 setCategoryDescription，不会经过这个保护）
+async function saveCatList(env, entries, preserveMissing) {
   const cur = await loadCatList(env);
+  const oldMap = {};
+  for (const c of cur.list) oldMap[c.name] = c.description || "";
   const seen = new Set();
   const uniq = [];
   for (const x of entries || []) {
     const name = String((x && x.name != null ? x.name : x) || "").trim();
     if (!name || seen.has(name)) continue;
     seen.add(name);
-    uniq.push({ name, description: String((x && x.description) || "").trim() });
+    let description = String((x && x.description) || "").trim();
+    if (!description && preserveMissing && oldMap[name]) description = oldMap[name];
+    uniq.push({ name, description });
   }
   const lines = uniq.map((e) =>
     "- name: " + yScalar(e.name) + (e.description ? "\n  description: " + yScalar(e.description) : "")
@@ -402,7 +409,7 @@ export async function onRequestPost(context) {
             ? { name: x }
             : { name: (x && (x.path || x.name)) || "", description: (x && x.description) || "" }
         );
-        const saved = await saveCatList(env, entries);
+        const saved = await saveCatList(env, entries, true); // ← 防覆盖
         return json(200, {
           ok: true,
           categories: saved.map((e) => ({ path: e.name, description: e.description })),
