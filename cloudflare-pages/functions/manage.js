@@ -24,6 +24,9 @@
 const DEF_REPO = "Entropyqwe/hexo-firefly-site";
 const DEF_BRANCH = "main";
 const POSTS_DIR = "source/_posts";
+// 手动创建的分类（含暂时没有文章的空分类）。Hexo 本身只认"被文章引用过的分类"，
+// 所以空分类必须另存一份，否则刷新就丢。
+const CATS_FILE = "source/_data/categories.yml";
 
 // ---------------------------------------------------------------- 基础工具
 
@@ -165,7 +168,10 @@ function yScalar(s) {
   // 这里只放行字母/数字/汉字以及空格 . _ + - / ，其余一律单引号包裹。
   // 放行 / 是为了让 permalink 写成 `permalink: /2026/09/06/x/` 这种自然形式
   // （YAML 纯标量允许以 / 开头；危险的是 - ? : , [ ] { } # & * ! | > ' " % @ ` 这些指示符）
-  if (/^[A-Za-z0-9\u4e00-\u9fff\/][A-Za-z0-9\u4e00-\u9fff ._+\-/]*$/.test(v)) return v;
+  // 顺带放行常用中文标点（全角，不是 YAML 指示符），让中文介绍写出来是干净的裸文本
+  var CJK_PUNCT = "，。、；：！？（）【】《》「」『』“”‘’…—～·";
+  var re = new RegExp("^[A-Za-z0-9\\u4e00-\\u9fff/" + CJK_PUNCT + "][A-Za-z0-9\\u4e00-\\u9fff ._+\\-/" + CJK_PUNCT + "]*$");
+  if (re.test(v)) return v;
   return "'" + v.replace(/'/g, "''") + "'";
 }
 const yList = (arr) => "[" + arr.map(yScalar).join(", ") + "]";
@@ -262,6 +268,70 @@ function protectPermalink(fields, oldDate, slug) {
   return true;
 }
 
+// ------------------------------------------------- 手动分类列表（含空分类）
+
+function unquoteYaml(v) {
+  let s = String(v).trim();
+  if (s.length >= 2 && ((s[0] === "'" && s.endsWith("'")) || (s[0] === '"' && s.endsWith('"')))) {
+    s = s.slice(1, -1);
+  }
+  return s.replace(/''/g, "'");
+}
+
+// 读分类列表。每项形如 { name, description }。
+// 兼容两种写法：老格式（纯字符串 `- 硬件`）和新格式（`- name: 硬件` + `description: ...`）
+async function loadCatList(env) {
+  const f = await ghGetFile(env, CATS_FILE);
+  if (!f || !f.content) return { list: [], sha: null };
+  const list = [];
+  let cur = null;
+  for (const raw of fromB64(f.content).split(/\r?\n/)) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const item = /^\s*-\s*(.*)$/.exec(line);
+    if (item) {
+      const rest = item[1].trim();
+      const nm = /^name\s*:\s*(.*)$/.exec(rest);
+      if (nm) {
+        cur = { name: unquoteYaml(nm[1]), description: "" };
+        list.push(cur);
+      } else {
+        const v = unquoteYaml(rest);
+        cur = v ? { name: v, description: "" } : null;
+        if (cur) list.push(cur);
+      }
+      continue;
+    }
+    if (!cur) continue;
+    const d = /^\s*description\s*:\s*(.*)$/.exec(line);
+    if (d) { cur.description = unquoteYaml(d[1]); continue; }
+    const n2 = /^\s*name\s*:\s*(.*)$/.exec(line);
+    if (n2) { cur.name = unquoteYaml(n2[1]); }
+  }
+  return { list: list.filter((x) => x.name), sha: f.sha };
+}
+
+async function saveCatList(env, entries) {
+  const cur = await loadCatList(env);
+  const seen = new Set();
+  const uniq = [];
+  for (const x of entries || []) {
+    const name = String((x && x.name != null ? x.name : x) || "").trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    uniq.push({ name, description: String((x && x.description) || "").trim() });
+  }
+  const lines = uniq.map((e) =>
+    "- name: " + yScalar(e.name) + (e.description ? "\n  description: " + yScalar(e.description) : "")
+  );
+  const body =
+    "# 分类列表（含暂时没有文章的空分类，以及分类介绍），由网页「文章管理」面板维护。\n" +
+    "# description 会显示在网站的分类页上；name 支持用 / 表示层级，如 摄影/夜景。\n" +
+    (lines.length ? lines.join("\n") + "\n" : "[]\n");
+  await ghPutFile(env, CATS_FILE, body, "📁 更新分类列表", cur.sha);
+  return uniq;
+}
+
 // ---------------------------------------------------------------- 主入口
 
 export async function onRequestPost(context) {
@@ -284,6 +354,7 @@ export async function onRequestPost(context) {
         return json(200, { ok: true, note: "身份验证通过" });
 
       case "list": {
+        const manual = await loadCatList(env);
         const posts = await loadAllPosts(env);
         posts.sort((a, b) => b.dateVal - a.dateVal);
         const cats = {};
@@ -301,9 +372,59 @@ export async function onRequestPost(context) {
           dir: POSTS_DIR,
           permalinkPattern: "/:year/:month/:day/:title/",
           posts: posts.map(({ _text, ...rest }) => rest),
-          categories: Object.keys(cats)
-            .sort()
-            .map((k) => ({ path: k, count: cats[k], depth: k.split("/").length - 1 })),
+          categories: (() => {
+            const all = new Set(Object.keys(cats));
+            const desc = {};
+            for (const m of manual.list) {
+              all.add(m.name);
+              if (m.description) desc[m.name] = m.description;
+              // 顺带补齐父级，让层级显示正常
+              const seg = m.name.split("/");
+              for (let i = 1; i < seg.length; i++) all.add(seg.slice(0, i).join("/"));
+            }
+            return [...all].sort().map((k) => ({
+              path: k,
+              count: cats[k] || 0,
+              depth: k.split("/").length - 1,
+              empty: !cats[k],
+              description: desc[k] || "",
+            }));
+          })(),
+        });
+      }
+
+      case "saveCategories": {
+        // 面板把「它认为应该存在的分类全集」送过来（新建/改名/删除后都会调用）
+        // 每项可以是字符串（旧）或 { path|name, description }（新）
+        const raw = Array.isArray(p.categories) ? p.categories : [];
+        const entries = raw.map((x) =>
+          typeof x === "string"
+            ? { name: x }
+            : { name: (x && (x.path || x.name)) || "", description: (x && x.description) || "" }
+        );
+        const saved = await saveCatList(env, entries);
+        return json(200, {
+          ok: true,
+          categories: saved.map((e) => ({ path: e.name, description: e.description })),
+          note: `已保存 ${saved.length} 个分类`,
+        });
+      }
+
+      case "setCategoryDescription": {
+        // 只改某一个分类的介绍（面板上「描述」按钮用这个，不会碰到文章）
+        const path = String(p.path || "").trim();
+        if (!path) return json(400, { ok: false, error: "缺少 path" });
+        const description = String(p.description == null ? "" : p.description).trim();
+        const cur = await loadCatList(env);
+        const found = cur.list.some((x) => x.name === path);
+        const next = found
+          ? cur.list.map((x) => (x.name === path ? { name: x.name, description } : x))
+          : cur.list.concat([{ name: path, description }]);
+        await saveCatList(env, next);
+        return json(200, {
+          ok: true,
+          description,
+          note: description ? `已保存「${path}」的介绍` : `已清空「${path}」的介绍`,
         });
       }
 
@@ -329,6 +450,24 @@ export async function onRequestPost(context) {
         if (!from || !to) return json(400, { ok: false, error: "需要 from 与 to" });
         const fromSeg = String(from).split("/").filter(Boolean);
         const toSeg = String(to).split("/").filter(Boolean);
+
+        // 同步手动分类列表：即使这是个空分类（没文章），也要一起改名
+        {
+          const cur = await loadCatList(env);
+          if (cur.list.length) {
+            const mapped = cur.list.map((x) => {
+              const seg = x.name.split("/");
+              let hit = true;
+              for (let i = 0; i < fromSeg.length; i++) {
+                if (seg[i] !== fromSeg[i]) { hit = false; break; }
+              }
+              return hit
+                ? { name: toSeg.concat(seg.slice(fromSeg.length)).join("/"), description: x.description }
+                : x;
+            });
+            await saveCatList(env, mapped);
+          }
+        }
         const posts = await loadAllPosts(env);
         const jobs = [];
         for (const post of posts) {
@@ -352,6 +491,18 @@ export async function onRequestPost(context) {
         const { name, moveTo } = p;
         if (!name) return json(400, { ok: false, error: "需要 name" });
         const target = String(moveTo || "").trim();
+
+        // 从手动分类列表里移除它以及它的子分类
+        {
+          const cur = await loadCatList(env);
+          const nameSeg = String(name).split("/").filter(Boolean);
+          const kept = cur.list.filter((x) => {
+            const seg = x.name.split("/");
+            for (let i = 0; i < nameSeg.length; i++) if (seg[i] !== nameSeg[i]) return true;
+            return false;
+          });
+          if (kept.length !== cur.list.length) await saveCatList(env, kept);
+        }
         const posts = await loadAllPosts(env);
         const jobs = [];
         for (const post of posts) {

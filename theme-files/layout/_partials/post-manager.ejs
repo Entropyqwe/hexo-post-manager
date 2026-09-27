@@ -117,6 +117,10 @@
   .pm-hint { font-size: .74rem; opacity: .55; margin-top: 8px; line-height: 1.5; }
   .pm-mb { margin-bottom: 10px; }
   .pm-empty { opacity: .5; font-size: .82rem; padding: 6px 2px; }
+  .pm-item-col { flex-direction: column; align-items: stretch; gap: 5px; }
+  .pm-item-main { display: flex; align-items: center; gap: 8px; }
+  .pm-desc { font-size: .78rem; opacity: .72; line-height: 1.5; word-break: break-word; padding-left: 2px; }
+  .pm-desc-none { opacity: .32; font-style: italic; }
 </style>
 <script>
 (function () {
@@ -218,12 +222,18 @@
       if (!state.categories.length) { box.innerHTML = '<div class="pm-empty">还没有分类</div>'; }
       else {
         box.innerHTML = state.categories.map(function (c) {
-          var cls = 'pm-item' + (c.depth === 1 ? ' pm-depth1' : c.depth === 2 ? ' pm-depth2' : c.depth > 2 ? ' pm-depth3' : '');
+          var cls = 'pm-item pm-item-col' + (c.depth === 1 ? ' pm-depth1' : c.depth === 2 ? ' pm-depth2' : c.depth > 2 ? ' pm-depth3' : '');
           return '<div class="' + cls + '">'
+            + '<div class="pm-item-main">'
             + '<span class="pm-name">📁 ' + esc(c.path) + '</span>'
-            + '<span class="pm-meta">' + c.count + ' 篇</span>'
+            + '<span class="pm-meta">' + (c.count ? c.count + ' 篇' : '未使用') + '</span>'
+            + '<button class="pm-mini" data-desc="' + esc(c.path) + '">' + (c.description ? '改介绍' : '加介绍') + '</button>'
             + '<button class="pm-mini" data-rename="' + esc(c.path) + '">重命名</button>'
             + '<button class="pm-mini pm-mini-danger" data-del="' + esc(c.path) + '">删除</button>'
+            + '</div>'
+            + (c.description
+                ? '<div class="pm-desc">' + esc(c.description) + '</div>'
+                : '<div class="pm-desc pm-desc-none">（还没有介绍 —— 点「加介绍」写一段，访客点进这个文件夹就能看到）</div>')
             + '</div>';
         }).join('');
       }
@@ -239,7 +249,17 @@
     document.getElementById('pm-catlist').addEventListener('click', function (e) {
       var b = e.target.closest ? e.target.closest('button') : null;
       if (!b) return;
-      if (b.dataset.rename) {
+      if (b.dataset.desc) {
+        var dpath = b.dataset.desc;
+        var curCat = state.categories.filter(function (x) { return x.path === dpath; })[0] || {};
+        var v = prompt('给文件夹「' + dpath + '」写一段介绍\n\n（访客点进这个文件夹时就会看到；留空则清除）', curCat.description || '');
+        if (v == null) return;
+        st('正在保存介绍…', true);
+        api('setCategoryDescription', { path: dpath, description: v.trim() }).then(function (o) {
+          st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
+          if (o && o.ok) load();
+        });
+      } else if (b.dataset.rename) {
         var from = b.dataset.rename;
         var to = prompt('把分类「' + from + '」重命名为：（斜杠表示子文件夹）', from);
         if (to == null) return;
@@ -254,7 +274,9 @@
         var name = b.dataset.del;
         var n = 0;
         state.posts.forEach(function (p) { if (p.categoryPath === name) n++; });
-        if (!confirm('删除分类「' + name + '」？\n\n' + n + ' 篇文章会变为「未分类」。\n（子分类不会被删除）')) return;
+        var msg = n ? ('删除分类「' + name + '」？\n\n' + n + ' 篇文章会变为「未分类」。\n（子分类不会被删除）')
+                    : ('删除空分类「' + name + '」？\n\n该分类下没有文章。');
+        if (!confirm(msg)) return;
         st('正在删除…', true);
         api('deleteCategory', { name: name }).then(function (o) {
           st((o && o.ok ? '✅ ' : '❌ ') + ((o && o.note) || (o && o.error) || ''), !!(o && o.ok));
@@ -266,22 +288,65 @@
     document.getElementById('pm-newcat').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') document.getElementById('pm-addcat').click();
     });
-    document.getElementById('pm-addcat').addEventListener('click', function () {
-      var v = document.getElementById('pm-newcat').value.trim();
-      if (!v) return st('⚠️ 请填写分类名', false);
-      var exists = state.categories.some(function (c) { return c.path === v; });
-      if (exists) return st('⚠️ 该分类已存在，直接在下方把文章移入即可', false);
-      st('分类「' + v + '」已准备好：请在下方「文章归属」里把文章选到它，保存后即生效。', true);
-      var sel = document.getElementById('pm-movelist').querySelector('select');
-      if (sel && !sel.querySelector('option[value="' + v.replace(/"/g, '\\"') + '"]')) {
-        var o = document.createElement('option');
-        o.value = v; o.textContent = v;
-        for (var i = 0; i < sel.options.length; i++) {
-          if (sel.options[i].value === '') { sel.insertBefore(o, sel.options[i + 1] || null); break; }
+    // ---- 分类增删改的公共逻辑 ----
+    // 把一个分类（含其父级）加进本地状态，并按层级排序
+    function addCategoryLocal(path) {
+      var seg = path.split('/');
+      for (var i = 1; i <= seg.length; i++) {
+        var p = seg.slice(0, i).join('/');
+        if (!state.categories.some(function (c) { return c.path === p; })) {
+          state.categories.push({ path: p, count: 0, depth: i - 1, empty: true, description: '' });
         }
       }
+      state.categories.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
+    }
+
+    // 让「所有」文章的下拉框都能选到它（原来只加了第一个，这是 bug）
+    function addOptionToAllSelects(path) {
+      var sels = document.querySelectorAll('#pm-movelist select');
+      Array.prototype.forEach.call(sels, function (sel) {
+        var has = Array.prototype.some.call(sel.options, function (o) { return o.value === path; });
+        if (has) return;
+        var o = document.createElement('option');
+        o.value = path; o.textContent = path;
+        var idx = 0;
+        for (var i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === '') { idx = i + 1; break; }
+        }
+        sel.insertBefore(o, sel.options[idx] || null);
+      });
+    }
+
+    // 把当前分类全集写回仓库（含暂时没有文章的空分类）
+    function persistCategories() {
+      return api('saveCategories', {
+        categories: state.categories.map(function (c) {
+          return { path: c.path, description: c.description || '' };
+        })
+      });
+    }
+
+    function doAddCat() {
+      var v = document.getElementById('pm-newcat').value.trim().replace(/^\/+|\/+$/g, '');
+      if (!v) return st('⚠️ 请填写分类名', false);
+      if (state.categories.some(function (c) { return c.path === v; })) {
+        return st('⚠️ 该分类已存在，直接在下方把文章移入即可', false);
+      }
+      addCategoryLocal(v);
+      renderCats();                 // 立刻重绘「现有分类」，新分类马上出现
+      addOptionToAllSelects(v);     // 所有文章的下拉框里都能选到
       document.getElementById('pm-newcat').value = '';
-    });
+      st('正在保存分类…', true);
+      persistCategories().then(function (o) {
+        if (o && o.ok) {
+          st('✅ 已新建分类「' + v + '」。到下方「文章归属」把文章选到它即可；\n注意：没有文章的分类不会出现在网站的分类页。', true);
+        } else {
+          st('⚠️ 面板里已创建，但写回仓库失败：' + ((o && o.error) || '未知错误'), false);
+        }
+      }).catch(function (e) { st('⚠️ 写回仓库失败：' + e.message, false); });
+    }
+
+    document.getElementById('pm-addcat').addEventListener('click', doAddCat);
 
     document.getElementById('pm-movelist').addEventListener('change', function (e) {
       var sel = e.target;
