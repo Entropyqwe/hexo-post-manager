@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 [ -f .env ] && set -a && . ./.env && set +a
-: "${CLOUDFLARE_API_TOKEN:?请先 cp .env.example .env 并填写}"
+# CLOUDFLARE_API_TOKEN 可留空：留空则直接使用 `wrangler login` 的登录态
 : "${REPO:?REPO 未填}"
 : "${BRANCH:?BRANCH 未填}"
 : "${ADMIN_KEY:?ADMIN_KEY 未填}"
